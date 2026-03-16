@@ -83,3 +83,57 @@ Current Format:
 <b>» Speed</b> : {3}/s
 <b>» ETA</b> : {4}
 """
+
+    CAPTION_TXT = """<b>Set Custom Caption
+
+Commands:
+/set_caption - Set your caption
+/del_caption - Delete caption
+/see_caption - View current caption
+
+Placeholders:
+{filename} - File name
+{filesize} - File size
+</b>"""
+
+    THUMBNAIL_TXT = """<b>Thumbnail Commands
+
+/setthumb - Set thumbnail (reply to photo)
+/viewthumb - View current thumbnail
+/delthumb - Delete thumbnail
+</b>"""
+
+    SEND_METADATA = """<b>Metadata Commands
+
+/setmetadata Name - Set all metadata fields
+/metadata - View current metadata
+
+Fields updated: Title, Author, Artist, Video, Audio, Subtitle
+</b>"""
+
+    DONATE_TXT = """<b>Support the Developer ❤️
+
+If you find this bot useful, consider supporting!
+
+Every contribution helps keep the bot running 🚀
+</b>"""
+
+    SOURCE_TXT = """<b>Bot Source Code
+
+This bot is a private project.
+
+For support or queries, contact the owner.
+</b>"""
+
+    ABOUT_TXT = """<b>About This Bot
+
+Advanced File Rename Bot with:
+• Auto rename with season/episode detection
+• Custom caption & thumbnail
+• Metadata embedding
+• H.265 encoding support
+• Queue management
+
+Developer: @cosmic_freak
+Updates: @Codeflix_Bots
+</b>"""
