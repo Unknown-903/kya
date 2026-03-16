@@ -1,0 +1,353 @@
+import os
+import sys
+import time
+import asyncio
+import logging
+import subprocess
+
+from pyrogram import Client, filters
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.errors import FloodWait
+
+from helper.utils import progress_for_pyrogram
+from config import Config
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger(__name__)
+
+# ================= UPSCALE MODELS =================
+
+UPSCALE_MODELS = {
+    "2x": {
+        "scale": 2,
+        "model": "realesr-animevideov3",
+        "label": "⚡ 2x Turbo",
+    },
+    "4x": {
+        "scale": 4,
+        "model": "realesr-animevideov3",
+        "label": "🚀 4x Ultra",
+    },
+    "4x_photo": {
+        "scale": 4,
+        "model": "realesrgan-x4plus",
+        "label": "🌄 4x Photo HD",
+    },
+    "2x_anime": {
+        "scale": 2,
+        "model": "realesrgan-x4plus-anime",
+        "label": "🎌 2x Anime AI",
+    },
+}
+
+SUPPORTED_FORMATS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
+
+# ================= ADMIN CHECK =================
+
+def is_admin(user_id):
+    return user_id == Config.OWNER_ID or user_id in Config.ADMIN
+
+# ================= FIND REAL-ESRGAN BINARY =================
+
+def get_realesrgan_cmd():
+    candidates = [
+        "realesrgan-ncnn-vulkan",
+        "./realesrgan-ncnn-vulkan",
+        "/usr/local/bin/realesrgan-ncnn-vulkan",
+        "./Real-ESRGAN/realesrgan-ncnn-vulkan",
+        "realesrgan-ncnn-vulkan.exe",
+        "./realesrgan-ncnn-vulkan.exe",
+    ]
+    for cmd in candidates:
+        try:
+            subprocess.run([cmd, "-h"], capture_output=True, timeout=5)
+            return cmd
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            continue
+    return None
+
+# ================= STATE =================
+
+upscale_wait = {}
+cancel_upscale = {}
+
+# ================= /upscale COMMAND =================
+
+@Client.on_message(
+    (filters.private | filters.group) &
+    filters.command("upscale") &
+    filters.reply
+)
+async def upscale_cmd(client, message):
+    user_id = message.from_user.id
+    if not is_admin(user_id):
+        return
+
+    replied = message.reply_to_message
+
+    has_image = replied.photo or (
+        replied.document and
+        replied.document.file_name and
+        any(replied.document.file_name.lower().endswith(ext) for ext in SUPPORTED_FORMATS)
+    )
+
+    if not has_image:
+        await message.reply_text(
+            "❌ Reply to an image (JPG, PNG, WEBP, BMP)\n\n"
+            "Usage: Reply to image and send /upscale"
+        )
+        return
+
+    if not get_realesrgan_cmd():
+        await message.reply_text(
+            "❌ **Real-ESRGAN not installed!**\n\n"
+            "**Linux/VPS install:**\n"
+            "`wget https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-ubuntu.zip`\n"
+            "`unzip realesrgan-ncnn-vulkan-20220424-ubuntu.zip`\n"
+            "`chmod +x realesrgan-ncnn-vulkan`\n"
+            "`sudo mv realesrgan-ncnn-vulkan /usr/local/bin/`"
+        )
+        return
+
+    upscale_wait[user_id] = {"msg": replied}
+
+    buttons = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("⚡ 2x Turbo", callback_data=f"upscale_model|{user_id}|2x"),
+            InlineKeyboardButton("🚀 4x Ultra", callback_data=f"upscale_model|{user_id}|4x"),
+        ],
+        [
+            InlineKeyboardButton("🌄 4x Photo HD", callback_data=f"upscale_model|{user_id}|4x_photo"),
+            InlineKeyboardButton("🎌 2x Anime AI", callback_data=f"upscale_model|{user_id}|2x_anime"),
+        ],
+        [
+            InlineKeyboardButton("❌ Cancel", callback_data=f"upscale_cancel_pre|{user_id}"),
+        ]
+    ])
+
+    await message.reply_text(
+        "🖼 **AI Image Upscaler**\n"
+        "━━━━━━━━━━━━━━━━━━━━\n\n"
+        "⚡ **2x Turbo** — Fast upscale, great quality\n"
+        "🚀 **4x Ultra** — Max resolution, best detail\n"
+        "🌄 **4x Photo HD** — Optimized for real photos\n"
+        "🎌 **2x Anime AI** — Perfect for anime & art\n\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "👇 **Select your mode:**",
+        reply_markup=buttons
+    )
+
+# ================= MODEL SELECT =================
+
+@Client.on_callback_query(filters.regex("^upscale_model"))
+async def upscale_model_select(client, query):
+    parts = query.data.split("|")
+    _, user_id, model_key = parts
+    user_id = int(user_id)
+
+    if query.from_user.id != user_id:
+        await query.answer("❌ Ye tumhara task nahi hai!", show_alert=True)
+        return
+
+    data = upscale_wait.pop(user_id, None)
+    if not data:
+        await query.answer("Session expired. Send /upscale again.", show_alert=True)
+        return
+
+    model_info = UPSCALE_MODELS[model_key]
+    task_id = int(time.time() * 1000)
+    cancel_upscale[task_id] = False
+
+    await query.message.edit_text(
+        f"🔄 Starting... {model_info['label']}"
+    )
+
+    asyncio.create_task(
+        run_upscale(client, data["msg"], query.message, task_id, user_id, model_info)
+    )
+
+# ================= CANCEL (pre-task) =================
+
+@Client.on_callback_query(filters.regex("^upscale_cancel_pre"))
+async def upscale_cancel_pre(client, query):
+    _, user_id = query.data.split("|")
+    user_id = int(user_id)
+    if query.from_user.id != user_id:
+        await query.answer("❌ Ye tumhara task nahi hai!", show_alert=True)
+        return
+    upscale_wait.pop(user_id, None)
+    await query.message.edit_text("❌ Upscale cancelled.")
+
+
+# ================= CANCEL (during task) =================
+
+@Client.on_callback_query(filters.regex("^upscale_cancel_pre"))
+async def cancel_upscale_pre(client, query):
+    _, user_id = query.data.split("|")
+    user_id = int(user_id)
+
+    if query.from_user.id != user_id:
+        await query.answer("❌ Ye tumhara task nahi hai!", show_alert=True)
+        return
+
+    upscale_wait.pop(user_id, None)
+    await query.message.edit_text("❌ Upscale cancelled.")
+
+
+@Client.on_callback_query(filters.regex("^cancel_upscale"))
+async def cancel_upscale_cb(client, query):
+    _, task_id, user_id = query.data.split("|")
+    task_id = int(task_id)
+    user_id = int(user_id)
+
+    if query.from_user.id != user_id:
+        await query.answer("❌ Ye tumhara task nahi hai!", show_alert=True)
+        return
+
+    cancel_upscale[task_id] = True
+    await query.answer("❌ Cancelling...")
+
+# ================= UPSCALE RUNNER =================
+
+async def run_upscale(client, msg, progress_msg, task_id, user_id, model_info):
+    scale = model_info["scale"]
+    model = model_info["model"]
+    label = model_info["label"]
+
+    input_file = f"upscale_in_{task_id}.png"
+    output_file = f"upscale_out_{task_id}.png"
+    file_path = None
+
+    try:
+        # ---------------- DOWNLOAD ----------------
+        await progress_msg.edit(
+            "📥 Downloading image...",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_upscale|{task_id}|{user_id}")]]
+            )
+        )
+
+        start_time = time.time()
+        file_path = await client.download_media(
+            msg,
+            file_name=input_file,
+            progress=progress_for_pyrogram,
+            progress_args=("📥 Downloading...", progress_msg, start_time)
+        )
+
+        if cancel_upscale.get(task_id):
+            await progress_msg.edit("❌ Cancelled")
+            return
+
+        if not file_path or not os.path.exists(file_path):
+            await progress_msg.edit("❌ Download failed")
+            return
+
+        logger.info(f"[{task_id}] Upscale | model={model} scale={scale}x")
+
+        # ---------------- UPSCALE ----------------
+        await progress_msg.edit(
+            f"🔍 Upscaling {label}\n\n⏳ Please wait...",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_upscale|{task_id}|{user_id}")]]
+            )
+        )
+
+        realesrgan_cmd = get_realesrgan_cmd()
+        cmd = [
+            realesrgan_cmd,
+            "-i", file_path,
+            "-o", output_file,
+            "-n", model,
+            "-s", str(scale),
+            "-f", "png",
+        ]
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+
+        # Poll every second for cancel
+        while True:
+            if cancel_upscale.get(task_id):
+                process.kill()
+                await progress_msg.edit("❌ Upscale Cancelled")
+                return
+            try:
+                await asyncio.wait_for(process.wait(), timeout=1.0)
+                break
+            except asyncio.TimeoutError:
+                continue
+
+        stdout, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            err = stderr.decode("utf-8", errors="ignore")[:300]
+            logger.error(f"[{task_id}] Upscale failed: {err}")
+            await progress_msg.edit(f"❌ Upscale failed!\n\n`{err}`")
+            return
+
+        if not os.path.exists(output_file):
+            await progress_msg.edit("❌ Output file not found")
+            return
+
+        logger.info(f"[{task_id}] Upscale done, uploading...")
+
+        # ---------------- UPLOAD ----------------
+        orig_size = os.path.getsize(file_path)
+        new_size = os.path.getsize(output_file)
+
+        caption = (
+            f"✅ **Upscaled {scale}x** — {label}\n"
+            f"📦 Original: `{round(orig_size/1024, 1)} KB`\n"
+            f"📦 Upscaled: `{round(new_size/1024, 1)} KB`"
+        )
+
+        start_time = time.time()
+        await progress_msg.edit(
+            "📤 Uploading...",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_upscale|{task_id}|{user_id}")]]
+            )
+        )
+
+        while True:
+            if cancel_upscale.get(task_id):
+                await progress_msg.edit("❌ Upload Cancelled")
+                return
+            try:
+                await client.send_document(
+                    chat_id=msg.chat.id,
+                    document=output_file,
+                    caption=caption,
+                    progress=progress_for_pyrogram,
+                    progress_args=("📤 Uploading...", progress_msg, start_time)
+                )
+                break
+            except FloodWait as e:
+                await asyncio.sleep(e.value)
+
+        await progress_msg.delete()
+        logger.info(f"[{task_id}] Upscale task complete")
+
+    except Exception as e:
+        logger.error(f"[{task_id}] Error: {e}")
+        try:
+            await progress_msg.edit(f"❌ Error: {str(e)[:200]}")
+        except:
+            pass
+
+    finally:
+        cancel_upscale.pop(task_id, None)
+        for f in [input_file, output_file, file_path]:
+            try:
+                if f and os.path.exists(f):
+                    os.remove(f)
+            except:
+                pass
