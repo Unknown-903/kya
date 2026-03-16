@@ -396,7 +396,7 @@ async def cancel_task_rename(client, query):
     if owner_id is None:
         return await query.answer("❌ Task not found or already done", show_alert=True)
 
-    if caller_id != owner_id and not is_admin(caller_id):
+    if caller_id != owner_id and not _perm_is_admin(caller_id):
         return await query.answer("❌ Ye tumhara task nahi hai!", show_alert=True)
 
     cancel_tasks.add(owner_id)
@@ -651,7 +651,21 @@ async def auto_rename_files(client, message: Message):
         except:
             thumb = None
 
-    caption = safe_filename
+    # Saved caption use karo
+    saved_caption = await codeflixbots.get_caption(user_id)
+    if saved_caption:
+        try:
+            file = message.document or message.video or message.audio
+            file_size = humanbytes(file.file_size) if file and file.file_size else "N/A"
+            caption = saved_caption.format(
+                filename=os.path.splitext(safe_filename)[0],
+                filesize=file_size,
+                duration=""
+            )
+        except Exception:
+            caption = safe_filename
+    else:
+        caption = safe_filename
 
     await msg.edit(
         "🚀 Uploading...",
