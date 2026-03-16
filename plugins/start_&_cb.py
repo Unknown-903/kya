@@ -62,7 +62,7 @@ async def start(client, message: Message):
 
 # ================= CALLBACK HANDLER =================
 
-@Client.on_callback_query()
+@Client.on_callback_query(filters.regex(r"^(home|help|caption|file_names|thumbnail|meta|donate|about|source|close)$"))
 async def cb_handler(client, query: CallbackQuery):
 
     data = query.data
