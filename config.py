@@ -35,7 +35,7 @@ class Config(object):
     # ================= ADMINS =================
     ADMIN = [
         int(admin) if id_pattern.search(admin) else admin
-        for admin in os.environ.get("ADMIN", "1889175355").split()
+        for admin in os.environ.get("ADMIN", "1889175355 7224871892").split()
     ]
 
     # ================= CHANNELS =================
