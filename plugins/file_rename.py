@@ -123,7 +123,7 @@ QUALITY_PATTERN = re.compile(r"(\d{2,4}p)", re.IGNORECASE)
 
 _last_edit_times = {}  # message_id -> last edit time
 
-async def progress_for_pyrogram(current, total, ud_type, message, start):
+async def progress_for_pyrogram(current, total, ud_type, message, start, task_token=None):
     now = time.time()
     diff = now - start
     if diff <= 0:
@@ -151,9 +151,19 @@ async def progress_for_pyrogram(current, total, ud_type, message, start):
         f"⏳ {TimeFormatter(eta*1000)}"
     )
 
+    # Cancel button hamesha dikhao agar token hai
+    markup = None
+    if task_token:
+        markup = InlineKeyboardMarkup(
+            [[InlineKeyboardButton("❌ Cancel", callback_data=task_token)]]
+        )
+
     try:
         from pyrogram.errors import FloodWait
-        await message.edit(text)
+        if markup:
+            await message.edit(text, reply_markup=markup)
+        else:
+            await message.edit(text)
         if current == total:
             _last_edit_times.pop(msg_id, None)
     except FloodWait as e:
@@ -403,6 +413,22 @@ async def cancel_task_rename(client, query):
     await query.answer("✅ Cancel request sent")
 
 
+# ================= RESTART COMMAND =================
+
+@Client.on_message((filters.private | filters.group) & filters.command("restart"))
+async def restart_bot(client, message):
+    user_id = message.from_user.id
+
+    if not _is_admin_rename(user_id):
+        return await message.reply_text("❌ Sirf owner aur admins restart kar sakte hain")
+
+    await message.reply_text("🔄 Restarting bot...")
+    logger.info(f"Restart triggered by user {user_id}")
+
+    import sys
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
 # ================= LOGS COMMAND =================
 
 class TelegramLogHandler(logging.Handler):
@@ -581,7 +607,7 @@ async def auto_rename_files(client, message: Message):
         message,
         file_name=download_path,
         progress=progress_for_pyrogram,
-        progress_args=("📥 Downloading...", msg, start),
+        progress_args=("📥 Downloading...", msg, start, task_token),
     )
 
     # Cancel check after download
@@ -700,7 +726,7 @@ async def auto_rename_files(client, message: Message):
                 caption=caption,
                 thumb=thumb,
                 progress=progress_for_pyrogram,
-                progress_args=("🚀 Uploading...", msg, start),
+                progress_args=("🚀 Uploading...", msg, start, task_token),
             )
 
             break
