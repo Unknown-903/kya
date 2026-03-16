@@ -18,6 +18,7 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 # ================= UPSCALE MODELS =================
 
@@ -151,7 +152,10 @@ async def upscale_cmd(client, message):
         )
         return
 
-    upscale_wait[user_id] = {"msg": replied}
+    upscale_wait[user_id] = {"msg": replied, "chat_id": message.chat.id}
+
+    # Group mein hai toh notify karo
+    is_group = message.chat.type in ["group", "supergroup"]
 
     buttons = InlineKeyboardMarkup([
         [
@@ -167,6 +171,8 @@ async def upscale_cmd(client, message):
         ]
     ])
 
+    dm_note = "\n\n📩 _Result will be sent to your DM_" if is_group else ""
+
     await message.reply_text(
         "🖼 **AI Image Upscaler**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -175,7 +181,7 @@ async def upscale_cmd(client, message):
         "🌄 **4x Photo HD** — Real photos `~1-3 min`\n"
         "🎌 **2x Anime** — Anime & art `~1-2 min`\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "👇 **Select your mode:**",
+        f"👇 **Select your mode:**{dm_note}",
         reply_markup=buttons
     )
 
@@ -270,6 +276,7 @@ async def run_upscale(client, msg, progress_msg, task_id, user_id, model_info):
         )
 
         start_time = time.time()
+        logger.info(f"[{task_id}] Download started | user={user_id}")
         file_path = await client.download_media(
             msg,
             file_name=input_file,
@@ -278,14 +285,17 @@ async def run_upscale(client, msg, progress_msg, task_id, user_id, model_info):
         )
 
         if cancel_upscale.get(task_id):
+            logger.info(f"[{task_id}] Cancelled during download")
             await progress_msg.edit("❌ Cancelled")
             return
 
         if not file_path or not os.path.exists(file_path):
+            logger.error(f"[{task_id}] Download failed — file_path={file_path}")
             await progress_msg.edit("❌ Download failed")
             return
 
-        logger.info(f"[{task_id}] Upscale | model={model} scale={scale}x")
+        file_size_mb = round(os.path.getsize(file_path) / 1024 / 1024, 2)
+        logger.info(f"[{task_id}] Download complete | size={file_size_mb}MB | model={model} scale={scale}x")
 
         # ---------------- UPSCALE ----------------
         await progress_msg.edit(
@@ -305,6 +315,7 @@ async def run_upscale(client, msg, progress_msg, task_id, user_id, model_info):
             "-f", "png",
         ]
 
+        logger.info(f"[{task_id}] Upscale process started | cmd={' '.join(cmd)}")
         process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -321,6 +332,7 @@ async def run_upscale(client, msg, progress_msg, task_id, user_id, model_info):
         while True:
             if cancel_upscale.get(task_id):
                 process.kill()
+                logger.info(f"[{task_id}] Upscale cancelled by user={user_id}")
                 await progress_msg.edit("❌ Upscale Cancelled")
                 return
 
@@ -363,11 +375,16 @@ async def run_upscale(client, msg, progress_msg, task_id, user_id, model_info):
             await progress_msg.edit("❌ Output file not found")
             return
 
-        logger.info(f"[{task_id}] Upscale done, uploading...")
-
-        # ---------------- UPLOAD ----------------
         orig_size = os.path.getsize(file_path)
         new_size = os.path.getsize(output_file)
+        logger.info(
+            f"[{task_id}] Upscale complete | "
+            f"input={round(orig_size/1024,1)}KB "
+            f"output={round(new_size/1024,1)}KB "
+            f"ratio={round(new_size/orig_size, 1)}x larger"
+        )
+
+        # ---------------- UPLOAD ----------------
 
         caption = (
             f"✅ **Upscaled {scale}x** — {label}\n"
@@ -383,13 +400,16 @@ async def run_upscale(client, msg, progress_msg, task_id, user_id, model_info):
             )
         )
 
+        # Group mein command tha toh DM mein bhejo — group spam nahi hoga
+        send_chat_id = user_id  # hamesha DM
+
         while True:
             if cancel_upscale.get(task_id):
                 await progress_msg.edit("❌ Upload Cancelled")
                 return
             try:
                 await client.send_document(
-                    chat_id=msg.chat.id,
+                    chat_id=send_chat_id,
                     document=output_file,
                     caption=caption,
                     progress=progress_for_pyrogram,
@@ -400,10 +420,11 @@ async def run_upscale(client, msg, progress_msg, task_id, user_id, model_info):
                 await asyncio.sleep(e.value)
 
         await progress_msg.delete()
-        logger.info(f"[{task_id}] Upscale task complete")
+        total_time = round(time.time() - start_time)
+        logger.info(f"[{task_id}] ✅ Task complete | user={user_id} | total_time={total_time}s")
 
     except Exception as e:
-        logger.error(f"[{task_id}] Error: {e}")
+        logger.exception(f"[{task_id}] Unexpected error | user={user_id} | error={e}")
         try:
             await progress_msg.edit(f"❌ Error: {str(e)[:200]}")
         except:
@@ -411,9 +432,13 @@ async def run_upscale(client, msg, progress_msg, task_id, user_id, model_info):
 
     finally:
         cancel_upscale.pop(task_id, None)
+        cleaned = []
         for f in [input_file, output_file, file_path]:
             try:
                 if f and os.path.exists(f):
                     os.remove(f)
+                    cleaned.append(f)
             except:
                 pass
+        if cleaned:
+            logger.info(f"[{task_id}] Cleanup done | files={cleaned}")
