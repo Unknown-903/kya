@@ -16,9 +16,7 @@ async def add_caption(client, message):
         return await message.reply_text(
             "**Give the caption format**\n\n"
             "**Example:**\n"
-            "`/set_caption 📕 Name ➠ {filename}\n\n"
-            "📦 Size ➠ {filesize}\n\n"
-            "⏰ Duration ➠ {duration}`"
+            "`/set_caption 📕 Name ➠ {filename}\n\n📦 Size ➠ {filesize}\n\n⏰ Duration ➠ {duration}`"
         )
 
     caption = message.text.split(" ", 1)[1]
