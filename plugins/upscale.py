@@ -26,21 +26,25 @@ UPSCALE_MODELS = {
         "scale": 2,
         "model": "realesr-animevideov3",
         "label": "⚡ 2x Turbo",
+        "eta": "~30s",
     },
     "4x": {
         "scale": 4,
         "model": "realesr-animevideov3",
         "label": "🚀 4x Ultra",
+        "eta": "~2 min",
     },
     "4x_photo": {
         "scale": 4,
         "model": "realesrgan-x4plus",
         "label": "🌄 4x Photo HD",
+        "eta": "~4 min",
     },
     "2x_anime": {
         "scale": 2,
         "model": "realesrgan-x4plus-anime",
         "label": "🎌 2x Anime AI",
+        "eta": "~1 min",
     },
 }
 
@@ -102,6 +106,40 @@ async def upscale_cmd(client, message):
         )
         return
 
+    # Image size limit check — max 10MB
+    file_size = 0
+    if replied.photo:
+        file_size = replied.photo.file_size or 0
+    elif replied.document:
+        file_size = replied.document.file_size or 0
+
+    max_size = 10 * 1024 * 1024  # 10MB
+    if file_size > max_size:
+        await message.reply_text(
+            f"❌ **Image too large!**\n\n"
+            f"📦 Your image: `{round(file_size/1024/1024, 1)} MB`\n"
+            f"📏 Max allowed: `10 MB`\n\n"
+            f"Please send a smaller image."
+        )
+        return
+
+    # Image size limit: max 5MB
+    MAX_SIZE = 5 * 1024 * 1024  # 5MB
+    file_size = 0
+    if replied.photo:
+        file_size = replied.photo.file_size or 0
+    elif replied.document:
+        file_size = replied.document.file_size or 0
+
+    if file_size > MAX_SIZE:
+        await message.reply_text(
+            f"❌ **Image too large!**\n\n"
+            f"📦 Your image: `{round(file_size/1024/1024, 2)} MB`\n"
+            f"📏 Max allowed: `5 MB`\n\n"
+            f"Please compress the image first and try again."
+        )
+        return
+
     if not get_realesrgan_cmd():
         await message.reply_text(
             "❌ **Real-ESRGAN not installed!**\n\n"
@@ -132,10 +170,10 @@ async def upscale_cmd(client, message):
     await message.reply_text(
         "🖼 **AI Image Upscaler**\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
-        "⚡ **2x Turbo** — Fast upscale, great quality\n"
-        "🚀 **4x Ultra** — Max resolution, best detail\n"
-        "🌄 **4x Photo HD** — Optimized for real photos\n"
-        "🎌 **2x Anime AI** — Perfect for anime & art\n\n"
+        "⚡ **2x Fast** — Great quality `~15-30s`\n"
+        "🚀 **4x Ultra** — Max detail `~30-60s`\n"
+        "🌄 **4x Photo HD** — Real photos `~1-3 min`\n"
+        "🎌 **2x Anime** — Anime & art `~1-2 min`\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
         "👇 **Select your mode:**",
         reply_markup=buttons
@@ -273,17 +311,45 @@ async def run_upscale(client, msg, progress_msg, task_id, user_id, model_info):
             stderr=asyncio.subprocess.PIPE
         )
 
-        # Poll every second for cancel
+        # Animated dots + ETA while upscaling
+        dots = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        dot_idx = 0
+        elapsed = 0
+        eta = model_info.get("eta", "please wait")
+        last_msg_update = 0
+
         while True:
             if cancel_upscale.get(task_id):
                 process.kill()
                 await progress_msg.edit("❌ Upscale Cancelled")
                 return
+
             try:
                 await asyncio.wait_for(process.wait(), timeout=1.0)
                 break
             except asyncio.TimeoutError:
-                continue
+                elapsed += 1
+                dot_idx = (dot_idx + 1) % len(dots)
+                now = time.time()
+                # Update message every 5 seconds to avoid FloodWait
+                if now - last_msg_update >= 5:
+                    last_msg_update = now
+                    mins, secs = divmod(elapsed, 60)
+                    elapsed_str = f"{mins}m {secs}s" if mins > 0 else f"{secs}s"
+                    try:
+                        await progress_msg.edit(
+                            f"🔍 Upscaling {label}\n\n"
+                            f"{dots[dot_idx]} Processing... `{elapsed_str}` elapsed\n"
+                            f"⏱ ETA: `{eta}`\n\n"
+                            f"_Please wait, AI is working..._",
+                            reply_markup=InlineKeyboardMarkup(
+                                [[InlineKeyboardButton("❌ Cancel", callback_data=f"cancel_upscale|{task_id}|{user_id}")]]
+                            )
+                        )
+                    except FloodWait as e:
+                        last_msg_update = time.time() + e.value
+                    except:
+                        pass
 
         stdout, stderr = await process.communicate()
 
