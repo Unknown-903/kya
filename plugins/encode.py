@@ -187,7 +187,15 @@ async def rename_yes(client, query):
 
 # ================= GET RENAME =================
 
-@Client.on_message((filters.private | filters.group) & filters.text & ~filters.command([]))
+@Client.on_message(
+    (filters.private | filters.group) &
+    filters.text &
+    ~filters.command(["encode","tasks","start","help","setthumb","delthumb","viewthumb",
+                      "setcaption","delcaption","seecaption","metadata","delmetadata",
+                      "addadmin","removeadmin","adminlist","authgroup","unauthgroup",
+                      "authlist","rename","queue","logs","batch","cancelbatch"]),
+    group=1
+)
 async def get_rename(client, message):
     user_id = message.from_user.id
     if user_id not in rename_wait:
