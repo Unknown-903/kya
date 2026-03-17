@@ -406,7 +406,14 @@ async def cancel_task_rename(client, query):
     if owner_id is None:
         return await query.answer("❌ Task not found or already done", show_alert=True)
 
-    if caller_id != owner_id and not _perm_is_admin(caller_id):
+    # Task owner — apna cancel kar sakta hai
+    if caller_id == owner_id:
+        pass
+    # Bot owner — kisi ka bhi cancel kar sakta hai
+    elif caller_id == Config.OWNER_ID:
+        pass
+    # Admin — sirf apna cancel kar sakta hai, dusre admin ka nahi
+    else:
         return await query.answer("❌ Ye tumhara task nahi hai!", show_alert=True)
 
     cancel_tasks.add(owner_id)
