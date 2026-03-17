@@ -386,8 +386,14 @@ async def cancel_task_encode(client, query):
     owner_id = int(owner_id)
     caller_id = query.from_user.id
 
-    # Sirf task ka owner ya admin cancel kar sake
-    if caller_id != owner_id and not _is_admin_encode(caller_id):
+    # Task owner — apna cancel kar sakta hai
+    if caller_id == owner_id:
+        pass
+    # Bot owner — kisi ka bhi cancel kar sakta hai
+    elif caller_id == Config.OWNER_ID:
+        pass
+    # Admin — sirf apna cancel kar sakta hai, dusre admin ka nahi
+    else:
         return await query.answer("❌ Ye tumhara task nahi hai!", show_alert=True)
 
     cancel_tasks[task_id] = True
